@@ -73,9 +73,10 @@ func (c Configuration) Initialize() error {
 				return nil, err
 			}
 
-			if !ok {
+			if ok {
 				logger.Get().Infow(
 					"ip hit rate-limit",
+					zap.String("username", conn.User()),
 					zap.String("ip_address", conn.RemoteAddr().String()[0:strings.Index(conn.RemoteAddr().String(), ":")]),
 				)
 				return nil, errors.New("you are being rate-limited")
@@ -86,6 +87,7 @@ func (c Configuration) Initialize() error {
 				if err := c.Jailer.Acquire(conn.RemoteAddr().String()); err != nil {
 					logger.Get().Warnw(
 						"failed to acquire bucket for connection",
+						zap.String("username", conn.User()),
 						zap.String("ip_address", conn.RemoteAddr().String()[0:strings.Index(conn.RemoteAddr().String(), ":")]),
 						zap.Error(err),
 					)

@@ -8,13 +8,6 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
-	"github.com/buger/jsonparser"
-	"github.com/patrickmn/go-cache"
-	"github.com/pkg/errors"
-	"github.com/pkg/sftp"
-	"github.com/pterodactyl/sftp-server/src/logger"
-	"go.uber.org/zap"
-	"golang.org/x/crypto/ssh"
 	"io"
 	"io/ioutil"
 	"net"
@@ -23,6 +16,15 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"github.com/buger/jsonparser"
+	"github.com/patrickmn/go-cache"
+	"github.com/pkg/errors"
+	"github.com/pkg/sftp"
+	"go.uber.org/zap"
+	"golang.org/x/crypto/ssh"
+
+	"github.com/pterodactyl/sftp-server/src/logger"
 )
 
 type AuthenticationRequest struct {
@@ -47,6 +49,7 @@ type SftpUser struct {
 type Configuration struct {
 	Data     []byte
 	Cache    *cache.Cache
+	Jailer   *Jailer
 	Settings Settings
 	User     SftpUser
 }
@@ -57,14 +60,38 @@ type AuthenticationResponse struct {
 	Permissions []string `json:"permissions"`
 }
 
-// Initalize the SFTP server and add a persistent listener to handle inbound SFTP connections.
-func (c Configuration) Initalize() error {
+// Initialize the SFTP server and add a persistent listener to handle inbound SFTP connections.
+func (c Configuration) Initialize() error {
 	serverConfig := &ssh.ServerConfig{
 		NoClientAuth: false,
 		MaxAuthTries: 6,
+
 		PasswordCallback: func(conn ssh.ConnMetadata, pass []byte) (*ssh.Permissions, error) {
+			ok, err := c.Jailer.IsLimited(conn.RemoteAddr().String())
+			if err != nil {
+				logger.Get().Warnw("failed to check if ip is limited", zap.Error(err))
+				return nil, err
+			}
+
+			if !ok {
+				logger.Get().Infow(
+					"ip hit rate-limit",
+					zap.String("ip_address", conn.RemoteAddr().String()[0:strings.Index(conn.RemoteAddr().String(), ":")]),
+				)
+				return nil, errors.New("you are being rate-limited")
+			}
+
 			sp, err := c.validateCredentials(conn.User(), pass)
 			if err != nil {
+				if err := c.Jailer.Acquire(conn.RemoteAddr().String()); err != nil {
+					logger.Get().Warnw(
+						"failed to acquire bucket for connection",
+						zap.String("ip_address", conn.RemoteAddr().String()[0:strings.Index(conn.RemoteAddr().String(), ":")]),
+						zap.Error(err),
+					)
+					return nil, errors.New("failed to check bucket")
+				}
+
 				return nil, errors.New("could not validate credentials")
 			}
 
@@ -119,7 +146,7 @@ func (c Configuration) AcceptInboundConnection(conn net.Conn, config *ssh.Server
 	// Before beginning a handshake must be performed on the incoming net.Conn
 	sconn, chans, reqs, err := ssh.NewServerConn(conn, config)
 	if err != nil {
-		logger.Get().Warnw("failed to accept an incoming connection", zap.Error(err))
+		logger.Get().Warnw("failed to accept an incoming connection", zap.String("ip_address", conn.RemoteAddr().String()[0:strings.Index(conn.RemoteAddr().String(), ":")]), zap.Error(err))
 		return
 	}
 	defer sconn.Close()

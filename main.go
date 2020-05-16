@@ -70,6 +70,7 @@ func main() {
 	var s = server.Configuration{
 		Data:  config,
 		Cache: cache.New(5*time.Minute, 10*time.Minute),
+		Jailer: server.NewJailer(),
 		User:  server.SftpUser{
 			Uid: uid,
 			Gid: gid,
@@ -84,7 +85,7 @@ func main() {
 		},
 	}
 
-	if err := s.Initalize(); err != nil {
+	if err := s.Initialize(); err != nil {
 		logger.Get().Fatalw("could not start SFTP server", zap.Error(err))
 	}
 }
